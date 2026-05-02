@@ -44,4 +44,3 @@ pyinstaller --onefile --windowed --name "GostGUI" gost_gui.py
 
 ## ⚖️ 免责声明
 本工具仅为 `gost` 的 UI 封装，不提供任何代理服务。请在遵守当地法律法规的前提下使用。
-"""
