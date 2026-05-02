@@ -11,57 +11,90 @@ CONFIG_FILE = "gost_history.json"
 class GostGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gost 代理控制台")
-        self.root.geometry("600x550")
+        self.root.title("Gost 代理控制台 (多规则版)")
+        self.root.geometry("700x600")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         self.process = None
+        self.rule_rows = []  # 保存所有转发规则界面的引用
         self.config = self.load_config()
 
         self.create_widgets()
-        self.load_history_to_ui()
+        self.load_session_to_ui()
 
     def load_config(self):
         """加载历史配置文件"""
         default_config = {
-            "gost_path": [],
-            "local_port": ["33890"],
-            "remote_ip": ["192.168.124.11"],
-            "remote_port": ["3389"],
-            "socks_ip": ["127.0.0.1"],
-            "socks_port": ["7897"]
+            "history": {
+                "gost_path": [],
+                "socks_ip": ["127.0.0.1"],
+                "socks_port": ["7890"],
+                "local_port": ["6690", "5001"],
+                "remote_ip": ["192.168.124.10"],
+                "remote_port": ["6690", "5001"]
+            },
+            "last_session": {
+                "gost_path": "",
+                "socks_ip": "127.0.0.1",
+                "socks_port": "7890",
+                "rules": [
+                    {"lp": "6690", "rip": "192.168.124.10", "rp": "6690"}
+                ]
+            }
         }
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     saved_config = json.load(f)
-                    # 合并默认配置和历史配置
-                    for k in default_config.keys():
-                        if k in saved_config:
-                            default_config[k] = saved_config[k]
+                    
+                    # 兼容旧版本配置文件格式的迁移
+                    if "history" not in saved_config:
+                        return default_config
+                        
+                    # 合并配置
+                    default_config["history"].update(saved_config.get("history", {}))
+                    default_config["last_session"] = saved_config.get("last_session", default_config["last_session"])
             except Exception as e:
                 print(f"读取配置文件失败: {e}")
         return default_config
 
     def save_config(self):
-        """保存当前输入到历史配置文件，并去重"""
-        current_values = {
-            "gost_path": self.cb_gost_path.get(),
-            "local_port": self.cb_local_port.get(),
-            "remote_ip": self.cb_remote_ip.get(),
-            "remote_port": self.cb_remote_port.get(),
-            "socks_ip": self.cb_socks_ip.get(),
-            "socks_port": self.cb_socks_port.get()
-        }
+        """保存当前输入并更新历史记录"""
+        def update_history(key, value):
+            if not value: return
+            hist = self.config["history"].get(key, [])
+            if value in hist:
+                hist.remove(value)
+            hist.insert(0, value)
+            self.config["history"][key] = hist[:10]  # 最多保留 10 条历史
 
-        for key, val in current_values.items():
-            if not val: continue
-            # 将新值插入到列表最前面，并去除重复项
-            if val in self.config[key]:
-                self.config[key].remove(val)
-            self.config[key].insert(0, val)
-            # 限制历史记录最多保留 10 条
-            self.config[key] = self.config[key][:10]
+        # 保存全局设置
+        g_path = self.cb_gost_path.get()
+        s_ip = self.cb_socks_ip.get()
+        s_port = self.cb_socks_port.get()
+        
+        update_history("gost_path", g_path)
+        update_history("socks_ip", s_ip)
+        update_history("socks_port", s_port)
+
+        self.config["last_session"]["gost_path"] = g_path
+        self.config["last_session"]["socks_ip"] = s_ip
+        self.config["last_session"]["socks_port"] = s_port
+
+        # 保存转发规则
+        rules_session = []
+        for row in self.rule_rows:
+            lp = row["lp"].get().strip()
+            rip = row["rip"].get().strip()
+            rp = row["rp"].get().strip()
+            
+            if lp or rip or rp:
+                rules_session.append({"lp": lp, "rip": rip, "rp": rp})
+                update_history("local_port", lp)
+                update_history("remote_ip", rip)
+                update_history("remote_port", rp)
+
+        self.config["last_session"]["rules"] = rules_session
 
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -74,28 +107,29 @@ class GostGUI:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # ---- 参数设置区域 ----
-        settings_frame = ttk.LabelFrame(main_frame, text="配置参数", padding="10")
-        settings_frame.pack(fill=tk.X, pady=(0, 10))
+        # ---- 全局参数区域 ----
+        global_frame = ttk.LabelFrame(main_frame, text="全局配置", padding="10")
+        global_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # 辅助函数：创建带 Label 的下拉框
-        def create_input_row(parent, label_text, row, key):
-            ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky=tk.W, pady=5)
-            cb = ttk.Combobox(parent, width=30)
-            cb.grid(row=row, column=1, sticky=tk.EW, padx=5, pady=5)
-            return cb
+        ttk.Label(global_frame, text="Gost 路径:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.cb_gost_path = ttk.Combobox(global_frame, width=50)
+        self.cb_gost_path.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5, columnspan=3)
+        btn_browse = ttk.Button(global_frame, text="浏览...", command=self.browse_file)
+        btn_browse.grid(row=0, column=4, padx=5, pady=5)
 
-        self.cb_gost_path = create_input_row(settings_frame, "Gost.exe 路径:", 0, "gost_path")
-        btn_browse = ttk.Button(settings_frame, text="浏览...", command=self.browse_file)
-        btn_browse.grid(row=0, column=2, padx=5, pady=5)
+        ttk.Label(global_frame, text="Socks5 IP:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.cb_socks_ip = ttk.Combobox(global_frame, width=15)
+        self.cb_socks_ip.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        ttk.Label(global_frame, text="Socks5 端口:").grid(row=1, column=2, sticky=tk.E, pady=5)
+        self.cb_socks_port = ttk.Combobox(global_frame, width=8)
+        self.cb_socks_port.grid(row=1, column=3, sticky=tk.W, padx=5, pady=5)
 
-        self.cb_local_port = create_input_row(settings_frame, "本地端口:", 1, "local_port")
-        self.cb_remote_ip = create_input_row(settings_frame, "远程 IP:", 2, "remote_ip")
-        self.cb_remote_port = create_input_row(settings_frame, "远程端口:", 3, "remote_port")
-        self.cb_socks_ip = create_input_row(settings_frame, "Socks5 代理 IP:", 4, "socks_ip")
-        self.cb_socks_port = create_input_row(settings_frame, "Socks5 代理端口:", 5, "socks_port")
+        global_frame.columnconfigure(1, weight=1)
 
-        settings_frame.columnconfigure(1, weight=1)
+        # ---- 转发规则区域 ----
+        self.rules_frame = ttk.LabelFrame(main_frame, text="端口转发规则 (-L)", padding="10")
+        self.rules_frame.pack(fill=tk.X, pady=(0, 10))
 
         # ---- 操作按钮区域 ----
         btn_frame = ttk.Frame(main_frame)
@@ -114,19 +148,68 @@ class GostGUI:
         self.txt_log = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, bg="black", fg="lightgreen", font=("Consolas", 10))
         self.txt_log.pack(fill=tk.BOTH, expand=True)
 
-    def load_history_to_ui(self):
-        """将加载的配置写入 UI 组件，并设置默认值为第一项"""
-        def set_cb(cb, key):
-            cb['values'] = self.config.get(key, [])
-            if self.config.get(key):
-                cb.set(self.config[key][0])
+    def add_rule_row(self, lp_val="", rip_val="", rp_val=""):
+        """动态添加一行转发规则"""
+        row_frame = ttk.Frame(self.rules_frame)
+        row_frame.pack(fill=tk.X, pady=2)
 
-        set_cb(self.cb_gost_path, "gost_path")
-        set_cb(self.cb_local_port, "local_port")
-        set_cb(self.cb_remote_ip, "remote_ip")
-        set_cb(self.cb_remote_port, "remote_port")
-        set_cb(self.cb_socks_ip, "socks_ip")
-        set_cb(self.cb_socks_port, "socks_port")
+        ttk.Label(row_frame, text="本地端口:").pack(side=tk.LEFT, padx=(0, 5))
+        cb_lp = ttk.Combobox(row_frame, width=8, values=self.config["history"].get("local_port", []))
+        cb_lp.pack(side=tk.LEFT, padx=(0, 15))
+        cb_lp.set(lp_val)
+
+        ttk.Label(row_frame, text="远程 IP:").pack(side=tk.LEFT, padx=(0, 5))
+        cb_rip = ttk.Combobox(row_frame, width=15, values=self.config["history"].get("remote_ip", []))
+        cb_rip.pack(side=tk.LEFT, padx=(0, 15))
+        cb_rip.set(rip_val)
+
+        ttk.Label(row_frame, text="远程端口:").pack(side=tk.LEFT, padx=(0, 5))
+        cb_rp = ttk.Combobox(row_frame, width=8, values=self.config["history"].get("remote_port", []))
+        cb_rp.pack(side=tk.LEFT, padx=(0, 15))
+        cb_rp.set(rp_val)
+
+        # 判断是创建 '+' 按钮还是 '-' 按钮
+        if len(self.rule_rows) == 0:
+            btn = ttk.Button(row_frame, text="+", width=3, command=lambda: self.add_rule_row())
+            btn.pack(side=tk.LEFT)
+        else:
+            btn = ttk.Button(row_frame, text="-", width=3)
+            btn.pack(side=tk.LEFT)
+            # 绑定删除事件
+            rule_dict = {"frame": row_frame, "lp": cb_lp, "rip": cb_rip, "rp": cb_rp}
+            btn.config(command=lambda: self.remove_rule_row(rule_dict))
+
+        if len(self.rule_rows) == 0:
+            self.rule_rows.append({"frame": row_frame, "lp": cb_lp, "rip": cb_rip, "rp": cb_rp})
+        else:
+            self.rule_rows.append(rule_dict)
+
+    def remove_rule_row(self, rule_dict):
+        """删除指定的规则行"""
+        rule_dict["frame"].destroy()
+        self.rule_rows.remove(rule_dict)
+
+    def load_session_to_ui(self):
+        """将上次关闭时的状态加载到界面上"""
+        hist = self.config["history"]
+        last = self.config["last_session"]
+
+        self.cb_gost_path['values'] = hist.get("gost_path", [])
+        self.cb_gost_path.set(last.get("gost_path", ""))
+
+        self.cb_socks_ip['values'] = hist.get("socks_ip", [])
+        self.cb_socks_ip.set(last.get("socks_ip", ""))
+
+        self.cb_socks_port['values'] = hist.get("socks_port", [])
+        self.cb_socks_port.set(last.get("socks_port", ""))
+
+        # 加载规则
+        rules = last.get("rules", [])
+        if not rules:
+            self.add_rule_row() # 如果没有规则，默认留一个空的
+        else:
+            for rule in rules:
+                self.add_rule_row(rule.get("lp", ""), rule.get("rip", ""), rule.get("rp", ""))
 
     def browse_file(self):
         filepath = filedialog.askopenfilename(
@@ -137,10 +220,10 @@ class GostGUI:
             self.cb_gost_path.set(filepath)
 
     def log(self, message):
-        """线程安全的日志输出函数"""
+        """线程安全的日志输出"""
         def append():
             self.txt_log.insert(tk.END, message + "\n")
-            self.txt_log.see(tk.END) # 自动滚动到底部
+            self.txt_log.see(tk.END)
         self.root.after(0, append)
 
     def toggle_connection(self):
@@ -151,32 +234,40 @@ class GostGUI:
 
     def start_gost(self):
         gost_path = self.cb_gost_path.get().strip()
-        local_port = self.cb_local_port.get().strip()
-        remote_ip = self.cb_remote_ip.get().strip()
-        remote_port = self.cb_remote_port.get().strip()
         socks_ip = self.cb_socks_ip.get().strip()
         socks_port = self.cb_socks_port.get().strip()
 
-        if not all([gost_path, local_port, remote_ip, remote_port, socks_ip, socks_port]):
-            messagebox.showwarning("参数不完整", "请填写所有必要的参数！")
+        if not gost_path or not os.path.exists(gost_path):
+            messagebox.showerror("错误", "Gost 路径不正确或文件不存在！")
             return
             
-        if not os.path.exists(gost_path):
-            messagebox.showerror("错误", f"找不到文件: {gost_path}")
+        if not socks_ip or not socks_port:
+            messagebox.showerror("错误", "请填写 Socks5 IP 和端口！")
             return
 
-        # 保存配置历史
+        cmd = [gost_path]
+
+        # 遍历添加所有 -L 规则
+        valid_rules_count = 0
+        for row in self.rule_rows:
+            lp = row["lp"].get().strip()
+            rip = row["rip"].get().strip()
+            rp = row["rp"].get().strip()
+            
+            if lp and rip and rp:
+                cmd.extend(["-L", f"tcp://127.0.0.1:{lp}/{rip}:{rp}"])
+                valid_rules_count += 1
+
+        if valid_rules_count == 0:
+            messagebox.showwarning("警告", "请至少填写一组完整的端口转发规则！")
+            return
+
+        # 添加 -F 规则
+        cmd.extend(["-F", f"socks5://{socks_ip}:{socks_port}"])
+
+        # 保存当前状态以便下次直接使用
         self.save_config()
-        self.load_history_to_ui() # 更新下拉框
 
-        # 拼接命令：-L "tcp://127.0.0.1:33890/192.168.124.11:3389" -F "socks5://127.0.0.1:7897"
-        cmd = [
-            gost_path,
-            "-L", f"tcp://127.0.0.1:{local_port}/{remote_ip}:{remote_port}",
-            "-F", f"socks5://{socks_ip}:{socks_port}"
-        ]
-
-        # 隐藏 CMD 窗口的神奇参数 (仅限 Windows)
         creationflags = 0
         if sys.platform == "win32":
             creationflags = subprocess.CREATE_NO_WINDOW
@@ -184,20 +275,18 @@ class GostGUI:
         self.log(f"[系统] 准备执行: {' '.join(cmd)}")
 
         try:
-            # 启动进程，捕获 stdout 和 stderr
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, # 将错误输出合并到标准输出
+                stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1, # 行缓冲
+                bufsize=1,
                 creationflags=creationflags
             )
 
             self.btn_toggle.config(text="断  开")
             self.log("[系统] Gost 已启动。")
 
-            # 启动后台线程读取日志，避免卡死主界面
             threading.Thread(target=self.read_output, daemon=True).start()
 
         except Exception as e:
@@ -213,23 +302,19 @@ class GostGUI:
             self.log("[系统] Gost 已断开。")
 
     def read_output(self):
-        """后台线程：持续读取 gost 的输出日志"""
         try:
-            # 只要 process 存在且没结束就一直读
             for line in iter(self.process.stdout.readline, ''):
                 if not line: break
                 self.log(line.strip())
-        except Exception as e:
+        except Exception:
             pass
         finally:
-            # 如果进程自行退出（比如报错），重置按钮状态
             if self.process:
                 self.process = None
                 self.root.after(0, lambda: self.btn_toggle.config(text="连  接"))
                 self.log("[系统] 进程已结束。")
 
     def on_closing(self):
-        """窗口关闭时的清理工作"""
         self.save_config()
         if self.process:
             self.process.terminate()
