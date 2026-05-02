@@ -13,7 +13,7 @@
 
 ### 1. 准备环境
 - 确保已安装 Python 3.x。
-- 下载 [gost 核心程序](https://github.com/ginuerzh/gost/releases) (例如 `gost-windows-amd64.exe`)。
+- 下载 [gost 核心程序](https://github.com/go-gost/gost/releases/) (例如 `gost_3.2.6_windows_386.zip`)。
 
 ### 2. 运行脚本
 直接运行主程序：
