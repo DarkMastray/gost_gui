@@ -255,7 +255,7 @@ class GostGUI:
             rp = row["rp"].get().strip()
             
             if lp and rip and rp:
-                cmd.extend(["-L", f"tcp://127.0.0.1:{lp}/{rip}:{rp}"])
+                cmd.extend(["-L", f"tcp://0.0.0.0:{lp}/{rip}:{rp}"])
                 valid_rules_count += 1
 
         if valid_rules_count == 0:
